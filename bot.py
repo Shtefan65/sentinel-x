@@ -22,9 +22,9 @@ from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError
 
 
-# =========================================================
+# ============================================================
 # CONFIG
-# =========================================================
+# ============================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -36,36 +36,38 @@ SESSION_STRING = os.getenv("SESSION_STRING", "")
 PORT = int(os.getenv("PORT", "10000"))
 
 
-# =========================================================
-# DEFENSE SETTINGS
-# =========================================================
+# ============================================================
+# PROTECTION SETTINGS
+# ============================================================
 
-# Количество входящих сообщений за окно
 RAID_WINDOW = 10
 
-# Если за RAID_WINDOW секунд приходит столько сообщений
-# от разных пользователей — включается защита.
+# Сколько разных отправителей за 10 секунд
+# считается атакой.
 RAID_UNIQUE_SENDERS = 5
 
-# Критический режим
+# Критический уровень.
 CRITICAL_UNIQUE_SENDERS = 10
 
-# Автоблокировка участников подозрительного рейда
+# Автоматически блокировать подозрительных отправителей
 AUTO_BLOCK = True
 
-# Автоматически удалять сообщения подозрительных пользователей
+# Удалять входящие сообщения во время Emergency
 AUTO_DELETE = True
 
-# Автоматически завершать неизвестные Telegram-сессии
-AUTO_KILL_NEW_SESSIONS = True
+# Автоматически завершать новые Telegram-сессии
+#
+# Для начала оставляем False.
+# Иначе SENTINEL-X может завершить новую
+# доверенную сессию при её появлении.
+AUTO_KILL_NEW_SESSIONS = False
 
-# Период проверки новых сессий
 SESSION_CHECK_INTERVAL = 60
 
 
-# =========================================================
-# APP
-# =========================================================
+# ============================================================
+# TELEGRAM / FASTAPI
+# ============================================================
 
 app = FastAPI()
 
@@ -79,9 +81,9 @@ user_client = TelegramClient(
 )
 
 
-# =========================================================
-# STATE
-# =========================================================
+# ============================================================
+# GLOBAL STATE
+# ============================================================
 
 started_at = time.time()
 
@@ -96,21 +98,27 @@ incoming_events = deque(maxlen=5000)
 sender_events = defaultdict(deque)
 
 blocked_users = set()
+
 known_sessions = set()
 
 attack_count = 0
 
 
-# =========================================================
+# ============================================================
 # HELPERS
-# =========================================================
+# ============================================================
 
 def now():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return datetime.now(timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S UTC"
+    )
 
 
 def admin_only(message: Message) -> bool:
-    return message.from_user and message.from_user.id == ADMIN_ID
+    return (
+        message.from_user
+        and message.from_user.id == ADMIN_ID
+    )
 
 
 async def admin_alert(text: str):
@@ -118,12 +126,21 @@ async def admin_alert(text: str):
         return
 
     with suppress(Exception):
-        await bot.send_message(ADMIN_ID, text)
+        await bot.send_message(
+            ADMIN_ID,
+            text
+        )
 
+
+# ============================================================
+# MAIN MENU
+# ============================================================
 
 def main_keyboard():
+
     return InlineKeyboardMarkup(
         inline_keyboard=[
+
             [
                 InlineKeyboardButton(
                     text="🛡 Состояние",
@@ -134,6 +151,7 @@ def main_keyboard():
                     callback_data="attack"
                 ),
             ],
+
             [
                 InlineKeyboardButton(
                     text="⚡ Emergency",
@@ -144,6 +162,7 @@ def main_keyboard():
                     callback_data="sessions"
                 ),
             ],
+
             [
                 InlineKeyboardButton(
                     text="🧪 Симуляция",
@@ -154,11 +173,17 @@ def main_keyboard():
                     callback_data="history"
                 ),
             ],
+
         ]
     )
 
 
+# ============================================================
+# PROTECTION STATUS
+# ============================================================
+
 def protection_status():
+
     if emergency_mode:
         return "🔴 EMERGENCY"
 
@@ -171,39 +196,55 @@ def protection_status():
     return "⚪ OFF"
 
 
+# ============================================================
+# STATUS SCREEN
+# ============================================================
+
 def get_status_text():
+
     uptime = int(time.time() - started_at)
 
     if attack_started_at:
-        attack_time = int(time.time() - attack_started_at)
+
+        attack_time = int(
+            time.time() - attack_started_at
+        )
+
         attack_line = f"{attack_time} сек."
+
     else:
+
         attack_line = "нет"
 
+
     return (
-        "🛡 <b>SENTINEL-X</b>\n\n"
-
-        f"Система: <b>{protection_status()}</b>\n"
-        f"Автозащита: <b>{'ON' if protection_enabled else 'OFF'}</b>\n"
-        f"Emergency Shield: <b>{'ACTIVE' if emergency_mode else 'READY'}</b>\n\n"
-
-        f"Активная атака: <b>{'ДА' if attack_started_at else 'НЕТ'}</b>\n"
-        f"Текущая атака: <b>{attack_line}</b>\n"
-        f"Всего инцидентов: <b>{attack_count}</b>\n"
-        f"Заблокировано: <b>{len(blocked_users)}</b>\n\n"
-
-        f"Uptime: <code>{uptime} сек.</code>"
+        "🛡 SENTINEL-X\n"
+        "\n"
+        f"Система: {protection_status()}\n"
+        f"Автозащита: {'ВКЛ' if protection_enabled else 'ВЫКЛ'}\n"
+        f"Emergency Shield: "
+        f"{'АКТИВЕН' if emergency_mode else 'ГОТОВ'}\n"
+        "\n"
+        f"Активная атака: "
+        f"{'ДА' if attack_started_at else 'НЕТ'}\n"
+        f"Текущая атака: {attack_line}\n"
+        f"Всего инцидентов: {attack_count}\n"
+        f"Заблокировано: {len(blocked_users)}\n"
+        "\n"
+        f"Время работы: {uptime} сек."
     )
 
 
-# =========================================================
-# RAID ENGINE
-# =========================================================
+# ============================================================
+# RAID TRACKING
+# ============================================================
 
 def register_sender(sender_id: int):
+
     current = time.time()
 
     q = sender_events[sender_id]
+
     q.append(current)
 
     cutoff = current - RAID_WINDOW
@@ -213,10 +254,15 @@ def register_sender(sender_id: int):
 
 
 def active_senders():
+
     current = time.time()
+
     result = set()
 
-    for sender_id, q in list(sender_events.items()):
+    for sender_id, q in list(
+        sender_events.items()
+    ):
+
         cutoff = current - RAID_WINDOW
 
         while q and q[0] < cutoff:
@@ -228,44 +274,63 @@ def active_senders():
     return result
 
 
+# ============================================================
+# DEFENSE MODE
+# ============================================================
+
 async def activate_defense(reason: str):
+
     global attack_started_at
     global last_attack_time
     global attack_count
 
     if attack_started_at is None:
+
         attack_started_at = time.time()
+
         attack_count += 1
 
         await admin_alert(
-            "🚨 <b>SENTINEL-X: ОБНАРУЖЕНА АТАКА</b>\n\n"
-            f"Причина: <b>{reason}</b>\n"
-            f"Время: <code>{now()}</code>\n\n"
-            "🛡 DEFENSE MODE активирован."
+            "🚨 SENTINEL-X\n\n"
+            "Обнаружена подозрительная активность.\n\n"
+            f"Причина: {reason}\n"
+            f"Время: {now()}\n\n"
+            "🛡 Режим защиты активирован."
         )
 
     last_attack_time = time.time()
 
 
+# ============================================================
+# EMERGENCY
+# ============================================================
+
 async def activate_emergency(reason: str):
+
     global emergency_mode
 
     if not emergency_mode:
+
         emergency_mode = True
 
         await admin_alert(
-            "🔴 <b>EMERGENCY SHIELD</b>\n\n"
-            f"Причина: <b>{reason}</b>\n\n"
-            "Автоматическая защита переведена "
-            "в критический режим."
+            "🔴 EMERGENCY SHIELD\n\n"
+            "Активирован критический режим защиты.\n\n"
+            f"Причина: {reason}"
         )
 
 
+# ============================================================
+# ATTACK CLEANUP
+# ============================================================
+
 async def attack_cleanup():
+
     global attack_started_at
     global emergency_mode
 
     while True:
+
         await asyncio.sleep(5)
 
         if attack_started_at is None:
@@ -274,26 +339,34 @@ async def attack_cleanup():
         active = active_senders()
 
         if not active:
+
             if last_attack_time:
+
                 if time.time() - last_attack_time > 15:
-                    duration = int(time.time() - attack_started_at)
+
+                    duration = int(
+                        time.time() - attack_started_at
+                    )
 
                     await admin_alert(
-                        "🟢 <b>АТАКА ЗАВЕРШЕНА</b>\n\n"
-                        f"Продолжительность: <b>{duration} сек.</b>\n"
-                        f"Время окончания: <code>{now()}</code>\n\n"
-                        "SENTINEL-X вернулся в обычный режим."
+                        "🟢 SENTINEL-X\n\n"
+                        "Атака завершена.\n\n"
+                        f"Продолжительность: {duration} сек.\n"
+                        f"Время окончания: {now()}\n\n"
+                        "Система вернулась в обычный режим."
                     )
 
                     attack_started_at = None
                     emergency_mode = False
 
 
-# =========================================================
-# TELEGRAM ACCOUNT MONITOR
-# =========================================================
+# ============================================================
+# INCOMING MESSAGE MONITOR
+# ============================================================
 
-@user_client.on(events.NewMessage(incoming=True))
+@user_client.on(
+    events.NewMessage(incoming=True)
+)
 async def incoming_message_handler(event):
 
     if not protection_enabled:
@@ -304,12 +377,16 @@ async def incoming_message_handler(event):
     if not sender:
         return
 
-    sender_id = getattr(sender, "id", None)
+    sender_id = getattr(
+        sender,
+        "id",
+        None
+    )
 
     if not sender_id:
         return
 
-    # Не считаем сообщения самого владельца
+    # Игнорируем владельца
     if sender_id == ADMIN_ID:
         return
 
@@ -325,10 +402,7 @@ async def incoming_message_handler(event):
 
     active = active_senders()
 
-    # -----------------------------------------------------
-    # RAID DETECTION
-    # -----------------------------------------------------
-
+    # Обычная атака
     if len(active) >= RAID_UNIQUE_SENDERS:
 
         await activate_defense(
@@ -336,25 +410,23 @@ async def incoming_message_handler(event):
             f"за {RAID_WINDOW} секунд"
         )
 
+    # Критический режим
     if len(active) >= CRITICAL_UNIQUE_SENDERS:
 
         await activate_emergency(
-            f"критический всплеск: {len(active)} отправителей"
+            f"критический всплеск: "
+            f"{len(active)} отправителей"
         )
 
-    # -----------------------------------------------------
-    # AUTO BLOCK
-    # -----------------------------------------------------
-
+    # Автоблокировка
     if AUTO_BLOCK and attack_started_at:
 
         if sender_id not in blocked_users:
 
-            # Добавляем в блок только при активной атаке
-            # и после срабатывания нескольких признаков.
             if len(active) >= RAID_UNIQUE_SENDERS:
 
                 try:
+
                     await user_client(
                         functions.contacts.BlockRequest(
                             id=sender_id
@@ -364,33 +436,33 @@ async def incoming_message_handler(event):
                     blocked_users.add(sender_id)
 
                     await admin_alert(
-                        "🚫 <b>ПОДОЗРИТЕЛЬНЫЙ ОТПРАВИТЕЛЬ ЗАБЛОКИРОВАН</b>\n\n"
-                        f"ID: <code>{sender_id}</code>\n"
-                        f"Время: <code>{now()}</code>"
+                        "🚫 SENTINEL-X\n\n"
+                        "Подозрительный отправитель заблокирован.\n\n"
+                        f"ID: {sender_id}\n"
+                        f"Время: {now()}"
                     )
 
                 except Exception as e:
+
                     await admin_alert(
-                        "⚠️ Не удалось заблокировать "
-                        f"<code>{sender_id}</code>\n"
-                        f"<code>{type(e).__name__}</code>"
+                        "⚠️ SENTINEL-X\n\n"
+                        "Не удалось заблокировать отправителя.\n\n"
+                        f"Тип ошибки: {type(e).__name__}"
                     )
 
-    # -----------------------------------------------------
-    # AUTO DELETE
-    # -----------------------------------------------------
-
+    # Автоудаление
     if AUTO_DELETE and emergency_mode:
 
         with suppress(Exception):
             await event.delete()
 
 
-# =========================================================
-# SESSION MONITOR
-# =========================================================
+# ============================================================
+# SESSIONS
+# ============================================================
 
 async def get_sessions():
+
     result = await user_client(
         functions.account.GetAuthorizationsRequest()
     )
@@ -407,29 +479,45 @@ async def check_sessions():
     while True:
 
         try:
+
             sessions = await get_sessions()
 
             current_hashes = {
-                getattr(session, "hash", None)
+                getattr(
+                    session,
+                    "hash",
+                    None
+                )
                 for session in sessions
             }
 
             current_hashes.discard(None)
 
-            # Первый запуск — просто запоминаем существующие
+            # Первый запуск.
+            # Запоминаем уже существующие сессии.
             if not known_sessions:
-                known_sessions = current_hashes.copy()
+
+                known_sessions = (
+                    current_hashes.copy()
+                )
 
             else:
 
-                new_sessions = current_hashes - known_sessions
+                new_sessions = (
+                    current_hashes - known_sessions
+                )
 
                 for session_hash in new_sessions:
 
                     session = next(
                         (
-                            s for s in sessions
-                            if getattr(s, "hash", None) == session_hash
+                            s
+                            for s in sessions
+                            if getattr(
+                                s,
+                                "hash",
+                                None
+                            ) == session_hash
                         ),
                         None
                     )
@@ -437,20 +525,41 @@ async def check_sessions():
                     if not session:
                         continue
 
-                    device = getattr(session, "device", "unknown")
-                    platform = getattr(session, "platform", "unknown")
-                    country = getattr(session, "country", "unknown")
-                    ip = getattr(session, "ip", "unknown")
+                    device = getattr(
+                        session,
+                        "device",
+                        "Неизвестно"
+                    )
+
+                    platform = getattr(
+                        session,
+                        "platform",
+                        "Неизвестно"
+                    )
+
+                    country = getattr(
+                        session,
+                        "country",
+                        "Неизвестно"
+                    )
+
+                    ip = getattr(
+                        session,
+                        "ip",
+                        "Неизвестно"
+                    )
 
                     await admin_alert(
-                        "🔐 <b>НОВАЯ СЕССИЯ</b>\n\n"
-                        f"Устройство: <code>{device}</code>\n"
-                        f"Платформа: <code>{platform}</code>\n"
-                        f"IP: <code>{ip}</code>\n"
-                        f"Страна: <code>{country}</code>\n\n"
+                        "🔐 SENTINEL-X\n\n"
+                        "Обнаружена новая сессия.\n\n"
+                        f"Устройство: {device}\n"
+                        f"Платформа: {platform}\n"
+                        f"IP: {ip}\n"
+                        f"Страна: {country}\n\n"
                         "SENTINEL-X обнаружил новую авторизацию."
                     )
 
+                    # По умолчанию отключено.
                     if AUTO_KILL_NEW_SESSIONS:
 
                         try:
@@ -462,57 +571,74 @@ async def check_sessions():
                             )
 
                             await admin_alert(
-                                "🛡 <b>НОВАЯ СЕССИЯ ЗАВЕРШЕНА</b>\n\n"
-                                "Автоматическая защита сработала."
+                                "🛡 SENTINEL-X\n\n"
+                                "Новая сессия завершена.\n\n"
+                                "Сработала автоматическая защита."
                             )
 
                         except Exception as e:
 
                             await admin_alert(
-                                "⚠️ <b>Не удалось завершить новую сессию</b>\n"
-                                f"<code>{type(e).__name__}</code>"
+                                "⚠️ SENTINEL-X\n\n"
+                                "Не удалось завершить новую сессию.\n\n"
+                                f"Ошибка: {type(e).__name__}"
                             )
 
-                known_sessions = current_hashes
+                known_sessions = (
+                    current_hashes
+                )
 
         except FloodWaitError as e:
 
-            await asyncio.sleep(e.seconds)
+            await asyncio.sleep(
+                e.seconds
+            )
 
         except Exception as e:
 
             await admin_alert(
-                "⚠️ Ошибка мониторинга сессий:\n"
-                f"<code>{type(e).__name__}</code>"
+                "⚠️ SENTINEL-X\n\n"
+                "Ошибка мониторинга сессий.\n\n"
+                f"Тип ошибки: {type(e).__name__}"
             )
 
-        await asyncio.sleep(SESSION_CHECK_INTERVAL)
+        await asyncio.sleep(
+            SESSION_CHECK_INTERVAL
+        )
 
 
-# =========================================================
-# TELEGRAM BOT
-# =========================================================
+# ============================================================
+# START COMMAND
+# ============================================================
 
 @dp.message(CommandStart())
 async def start(message: Message):
 
     if not admin_only(message):
+
         await message.answer(
-            "⛔ Этот бот является приватной системой управления."
+            "⛔ Доступ запрещён.\n"
+            "Этот бот является приватной системой управления."
         )
+
         return
 
     await message.answer(
-        "🛡 <b>SENTINEL-X</b>\n\n"
-        "Система автоматической защиты от атак "
-        "и подозрительной активности.\n\n"
-        "Выбери действие:",
+        "🛡 SENTINEL-X\n\n"
+        "Система мониторинга и защиты Telegram-аккаунта.\n\n"
+        "Выберите действие:",
         reply_markup=main_keyboard()
     )
 
 
+# ============================================================
+# STATUS
+# ============================================================
+
 @dp.callback_query(F.data == "status")
-async def callback_status(callback: CallbackQuery):
+async def callback_status(
+    callback: CallbackQuery
+):
 
     if callback.from_user.id != ADMIN_ID:
         return
@@ -525,8 +651,14 @@ async def callback_status(callback: CallbackQuery):
     await callback.answer()
 
 
+# ============================================================
+# ATTACK
+# ============================================================
+
 @dp.callback_query(F.data == "attack")
-async def callback_attack(callback: CallbackQuery):
+async def callback_attack(
+    callback: CallbackQuery
+):
 
     if callback.from_user.id != ADMIN_ID:
         return
@@ -534,11 +666,14 @@ async def callback_attack(callback: CallbackQuery):
     active = active_senders()
 
     text = (
-        "🚨 <b>ТЕКУЩАЯ АТАКА</b>\n\n"
-        f"Статус: <b>{'ACTIVE' if attack_started_at else 'нет'}</b>\n"
-        f"Активных отправителей: <b>{len(active)}</b>\n"
-        f"Emergency: <b>{'ON' if emergency_mode else 'OFF'}</b>\n"
-        f"Заблокировано: <b>{len(blocked_users)}</b>"
+        "🚨 ТЕКУЩАЯ АТАКА\n"
+        "\n"
+        f"Статус: "
+        f"{'АКТИВНА' if attack_started_at else 'нет'}\n"
+        f"Активных отправителей: {len(active)}\n"
+        f"Emergency: "
+        f"{'ВКЛ' if emergency_mode else 'ВЫКЛ'}\n"
+        f"Заблокировано: {len(blocked_users)}"
     )
 
     await callback.message.edit_text(
@@ -549,8 +684,14 @@ async def callback_attack(callback: CallbackQuery):
     await callback.answer()
 
 
+# ============================================================
+# EMERGENCY BUTTON
+# ============================================================
+
 @dp.callback_query(F.data == "emergency")
-async def callback_emergency(callback: CallbackQuery):
+async def callback_emergency(
+    callback: CallbackQuery
+):
 
     global emergency_mode
 
@@ -562,23 +703,33 @@ async def callback_emergency(callback: CallbackQuery):
     if emergency_mode:
 
         await admin_alert(
-            "🔴 Emergency Shield включён вручную."
+            "🔴 SENTINEL-X\n\n"
+            "Emergency Shield включён вручную."
         )
 
     await callback.message.edit_text(
-        "⚡ <b>EMERGENCY SHIELD</b>\n\n"
+        "⚡ EMERGENCY SHIELD\n"
+        "\n"
         f"Состояние: "
-        f"<b>{'ACTIVE' if emergency_mode else 'READY'}</b>\n\n"
-        "В критическом режиме подозрительные "
-        "входящие сообщения автоматически удаляются.",
+        f"{'АКТИВЕН' if emergency_mode else 'ГОТОВ'}\n"
+        "\n"
+        "В критическом режиме "
+        "подозрительные входящие сообщения "
+        "автоматически удаляются.",
         reply_markup=main_keyboard()
     )
 
     await callback.answer()
 
 
+# ============================================================
+# SESSIONS BUTTON
+# ============================================================
+
 @dp.callback_query(F.data == "sessions")
-async def callback_sessions(callback: CallbackQuery):
+async def callback_sessions(
+    callback: CallbackQuery
+):
 
     if callback.from_user.id != ADMIN_ID:
         return
@@ -588,21 +739,48 @@ async def callback_sessions(callback: CallbackQuery):
         sessions = await get_sessions()
 
         lines = [
-            "🔐 <b>АКТИВНЫЕ СЕССИИ</b>\n"
+            "🔐 АКТИВНЫЕ СЕССИИ",
+            ""
         ]
 
-        for i, session in enumerate(sessions, 1):
+        for i, session in enumerate(
+            sessions,
+            1
+        ):
 
-            device = getattr(session, "device", "?")
-            platform = getattr(session, "platform", "?")
-            ip = getattr(session, "ip", "?")
-            current = getattr(session, "current", False)
+            device = getattr(
+                session,
+                "device",
+                "Неизвестно"
+            )
+
+            platform = getattr(
+                session,
+                "platform",
+                "Неизвестно"
+            )
+
+            ip = getattr(
+                session,
+                "ip",
+                "Неизвестно"
+            )
+
+            current = getattr(
+                session,
+                "current",
+                False
+            )
+
+            marker = "🟢" if current else "⚪"
 
             lines.append(
-                f"{i}. "
-                f"{'🟢' if current else '⚪'} "
-                f"{device} / {platform}\n"
-                f"   IP: <code>{ip}</code>"
+                f"{i}. {marker} "
+                f"{device} / {platform}"
+            )
+
+            lines.append(
+                f"   IP: {ip}"
             )
 
         await callback.message.edit_text(
@@ -613,16 +791,22 @@ async def callback_sessions(callback: CallbackQuery):
     except Exception as e:
 
         await callback.message.edit_text(
-            "⚠️ Ошибка получения сессий:\n"
-            f"<code>{type(e).__name__}</code>",
+            "⚠️ Не удалось получить список сессий.\n\n"
+            f"Ошибка: {type(e).__name__}",
             reply_markup=main_keyboard()
         )
 
     await callback.answer()
 
 
+# ============================================================
+# SIMULATION
+# ============================================================
+
 @dp.callback_query(F.data == "simulation")
-async def callback_simulation(callback: CallbackQuery):
+async def callback_simulation(
+    callback: CallbackQuery
+):
 
     global attack_started_at
     global last_attack_time
@@ -632,50 +816,64 @@ async def callback_simulation(callback: CallbackQuery):
         return
 
     attack_started_at = time.time()
+
     last_attack_time = time.time()
 
     await callback.message.edit_text(
-        "🧪 <b>СИМУЛЯЦИЯ АТАКИ</b>\n\n"
-        "Тестовый инцидент создан.\n\n"
-        "Проверяем:\n"
-        "• Defense Engine\n"
+        "🧪 СИМУЛЯЦИЯ АТАКИ\n"
+        "\n"
+        "Тестовый инцидент создан.\n"
+        "\n"
+        "Проверяются:\n"
+        "• система обнаружения\n"
+        "• Defense Mode\n"
         "• Emergency Shield\n"
         "• уведомления\n"
-        "• Attack Timeline",
+        "• история событий",
         reply_markup=main_keyboard()
     )
 
     await admin_alert(
-        "🧪 <b>SIMULATION</b>\n\n"
+        "🧪 SENTINEL-X\n\n"
         "Тестовая атака запущена вручную."
     )
 
     await callback.answer()
 
 
+# ============================================================
+# HISTORY
+# ============================================================
+
 @dp.callback_query(F.data == "history")
-async def callback_history(callback: CallbackQuery):
+async def callback_history(
+    callback: CallbackQuery
+):
 
     if callback.from_user.id != ADMIN_ID:
         return
 
-    events_count = len(incoming_events)
+    events_count = len(
+        incoming_events
+    )
 
     await callback.message.edit_text(
-        "📊 <b>ИСТОРИЯ</b>\n\n"
-        f"Событий в памяти: <b>{events_count}</b>\n"
-        f"Атак обнаружено: <b>{attack_count}</b>\n"
-        f"Заблокировано: <b>{len(blocked_users)}</b>\n\n"
-        f"Последняя проверка: <code>{now()}</code>",
+        "📊 ИСТОРИЯ\n"
+        "\n"
+        f"Событий в памяти: {events_count}\n"
+        f"Атак обнаружено: {attack_count}\n"
+        f"Заблокировано: {len(blocked_users)}\n"
+        "\n"
+        f"Последняя проверка: {now()}",
         reply_markup=main_keyboard()
     )
 
     await callback.answer()
 
 
-# =========================================================
-# HEALTH SERVER
-# =========================================================
+# ============================================================
+# FASTAPI
+# ============================================================
 
 @app.get("/")
 async def root():
@@ -700,45 +898,81 @@ async def health():
     }
 
 
-# =========================================================
-# STARTUP
-# =========================================================
+# ============================================================
+# TELEGRAM START
+# ============================================================
 
 async def start_telegram():
 
     if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN is not configured")
+        raise RuntimeError(
+            "BOT_TOKEN не настроен"
+        )
 
     if not ADMIN_ID:
-        raise RuntimeError("ADMIN_ID is not configured")
+        raise RuntimeError(
+            "ADMIN_ID не настроен"
+        )
 
     if not API_ID or not API_HASH:
-        raise RuntimeError("API_ID/API_HASH are not configured")
+        raise RuntimeError(
+            "API_ID/API_HASH не настроены"
+        )
 
     if not SESSION_STRING:
-        raise RuntimeError("SESSION_STRING is not configured")
+        raise RuntimeError(
+            "SESSION_STRING не настроен"
+        )
 
-    await user_client.start()
+    # ВАЖНО:
+    # connect(), а не start().
+    #
+    # Render не имеет интерактивного ввода,
+    # поэтому start() здесь использовать не нужно.
+
+    await user_client.connect()
+
+    if not await user_client.is_user_authorized():
+
+        raise RuntimeError(
+            "SESSION_STRING недействительна "
+            "или Telegram-сессия была отозвана"
+        )
 
     me = await user_client.get_me()
 
     await admin_alert(
-        "🟢 <b>SENTINEL-X запущен</b>\n\n"
-        f"Аккаунт: <b>{me.first_name or 'Unknown'}</b>\n"
-        f"ID: <code>{me.id}</code>\n\n"
+        "🟢 SENTINEL-X запущен\n"
+        "\n"
+        f"Аккаунт: {me.first_name or 'Неизвестно'}\n"
+        f"ID: {me.id}\n"
+        "\n"
         "🛡 Автозащита активна."
     )
 
+
+# ============================================================
+# BOT WORKER
+# ============================================================
 
 async def bot_worker():
 
     await start_telegram()
 
-    asyncio.create_task(check_sessions())
-    asyncio.create_task(attack_cleanup())
+    asyncio.create_task(
+        check_sessions()
+    )
+
+    asyncio.create_task(
+        attack_cleanup()
+    )
 
     await dp.start_polling(bot)
 
+
+# ============================================================
+# WEB WORKER
+# ============================================================
 
 async def web_worker():
 
@@ -754,6 +988,10 @@ async def web_worker():
     await server.serve()
 
 
+# ============================================================
+# MAIN
+# ============================================================
+
 async def main():
 
     await asyncio.gather(
@@ -763,4 +1001,5 @@ async def main():
 
 
 if __name__ == "__main__":
+
     asyncio.run(main())
