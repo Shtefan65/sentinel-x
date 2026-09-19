@@ -1,0 +1,4 @@
+aiogram==3.31.0
+Telethon==1.43.2
+fastapi==0.141.1
+uvicorn[standard]>=0.35,<1
